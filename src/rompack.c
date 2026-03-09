@@ -1,8 +1,9 @@
 /*
  * rompack — NEXUS-32 ROM packer.
- * Usage: rompack -o game.nxrom -c pack.toml [--no-validate]
- * Minimal manifest (pack.toml): code, data, entry_point, title, author.
- * Full .nxbin + build.toml support when SDK defines format.
+ * Mode 1: rompack -o <out.nxrom> -c <pack.toml> [--no-validate] [--compress]
+ *   Manifest must have code, entry_point, title, author; optional data.
+ * Mode 2: rompack -o <out.nxrom> -b <file.nxbin> [ -c pack.toml ] [--no-validate] [--compress]
+ *   Code/data from .nxbin; entry_point from .nxbin; optional -c for title/author/screen/cycle_budget.
  */
 
 #include "rom_header.h"
@@ -12,7 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 
+#define NXB_MAGIC             0x0042584Eu  /* .nxbin magic (little-endian "NXB\0") */
 #define PACK_CODE_PATH_SIZE   256
 #define PACK_DATA_PATH_SIZE   256
 #define PACK_TITLE_SIZE       32
@@ -92,7 +95,8 @@ static uint32_t parse_uint32(const char *s)
 	return (uint32_t)v;
 }
 
-static int load_manifest(const char *path, pack_manifest_t *m)
+/* metadata_only: 1 = only read title/author/screen/cycle (for -b mode with -c); 0 = require code path */
+static int load_manifest(const char *path, pack_manifest_t *m, int metadata_only)
 {
 	FILE *f = fopen(path, "r");
 	if (!f) {
@@ -131,10 +135,76 @@ static int load_manifest(const char *path, pack_manifest_t *m)
 		}
 	}
 	fclose(f);
-	if (!m->code_path[0]) {
+	if (!metadata_only && !m->code_path[0]) {
 		fprintf(stderr, "rompack: manifest must specify 'code' file\n");
 		return -1;
 	}
+	return 0;
+}
+
+/* Read .nxbin from SDK linker: 16-byte header (magic, entry_point, code_size, data_size) then code then data */
+static int load_nxbin(const char *path, uint8_t **code_buf, size_t *code_size, uint8_t **data_buf, size_t *data_size, uint32_t *entry_point)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		fprintf(stderr, "rompack: cannot open %s\n", path);
+		return -1;
+	}
+	uint8_t hdr[16];
+	if (fread(hdr, 1, 16, f) != 16) {
+		fprintf(stderr, "rompack: %s too small for .nxbin header\n", path);
+		fclose(f);
+		return -1;
+	}
+	uint32_t magic = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) | ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
+	if (magic != NXB_MAGIC) {
+		fprintf(stderr, "rompack: %s not a .nxbin file (bad magic 0x%08X)\n", path, (unsigned)magic);
+		fclose(f);
+		return -1;
+	}
+	*entry_point = (uint32_t)hdr[4] | ((uint32_t)hdr[5] << 8) | ((uint32_t)hdr[6] << 16) | ((uint32_t)hdr[7] << 24);
+	uint32_t cs = (uint32_t)hdr[8] | ((uint32_t)hdr[9] << 8) | ((uint32_t)hdr[10] << 16) | ((uint32_t)hdr[11] << 24);
+	uint32_t ds = (uint32_t)hdr[12] | ((uint32_t)hdr[13] << 8) | ((uint32_t)hdr[14] << 16) | ((uint32_t)hdr[15] << 24);
+	if (cs > CODE_SIZE_MAX || ds > DATA_SIZE_MAX) {
+		fprintf(stderr, "rompack: .nxbin code/data size exceeds limits\n");
+		fclose(f);
+		return -1;
+	}
+	*code_buf = NULL;
+	*data_buf = NULL;
+	*code_size = cs;
+	*data_size = ds;
+	if (cs) {
+		*code_buf = malloc(cs);
+		if (!*code_buf) {
+			fprintf(stderr, "rompack: out of memory\n");
+			fclose(f);
+			return -1;
+		}
+		if (fread(*code_buf, 1, cs, f) != cs) {
+			fprintf(stderr, "rompack: failed to read code from %s\n", path);
+			free(*code_buf);
+			fclose(f);
+			return -1;
+		}
+	}
+	if (ds) {
+		*data_buf = malloc(ds);
+		if (!*data_buf) {
+			fprintf(stderr, "rompack: out of memory\n");
+			if (*code_buf) free(*code_buf);
+			fclose(f);
+			return -1;
+		}
+		if (fread(*data_buf, 1, ds, f) != ds) {
+			fprintf(stderr, "rompack: failed to read data from %s\n", path);
+			if (*code_buf) free(*code_buf);
+			free(*data_buf);
+			fclose(f);
+			return -1;
+		}
+	}
+	fclose(f);
 	return 0;
 }
 
@@ -172,10 +242,16 @@ static int read_file(const char *path, uint8_t **out_buf, size_t *out_size)
 	return 0;
 }
 
+static const char usage[] =
+	"rompack: usage:\n"
+	"  Mode 1: rompack -o <out.nxrom> -c <pack.toml> [--no-validate] [--compress]\n"
+	"  Mode 2: rompack -o <out.nxrom> -b <file.nxbin> [-c pack.toml] [--no-validate] [--compress]\n";
+
 int main(int argc, char **argv)
 {
 	const char *out_path = NULL;
 	const char *manifest_path = NULL;
+	const char *binary_path = NULL;
 	int no_validate = 0;
 	int use_compress = 0;
 	for (int i = 1; i < argc; i++) {
@@ -183,46 +259,78 @@ int main(int argc, char **argv)
 			out_path = argv[++i];
 		else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc)
 			manifest_path = argv[++i];
+		else if (strcmp(argv[i], "-b") == 0 && i + 1 < argc)
+			binary_path = argv[++i];
 		else if (strcmp(argv[i], "--no-validate") == 0)
 			no_validate = 1;
 		else if (strcmp(argv[i], "--compress") == 0)
 			use_compress = 1;
 		else {
-			fprintf(stderr, "rompack: usage: rompack -o <out.nxrom> -c <pack.toml> [--no-validate] [--compress]\n");
+			fputs(usage, stderr);
 			return 1;
 		}
 	}
-	if (!out_path || !manifest_path) {
-		fprintf(stderr, "rompack: usage: rompack -o <out.nxrom> -c <pack.toml> [--no-validate] [--compress]\n");
+	if (!out_path) {
+		fputs(usage, stderr);
+		return 1;
+	}
+	if (binary_path && manifest_path) {
+		/* -b with -c: binary mode, manifest for metadata only */
+	} else if (binary_path) {
+		/* -b without -c: binary mode, use defaults for metadata */
+	} else if (!manifest_path) {
+		fprintf(stderr, "rompack: need -c <pack.toml> (manifest mode) or -b <file.nxbin> (binary mode)\n");
+		fputs(usage, stderr);
 		return 1;
 	}
 
 	pack_manifest_t manifest;
-	if (load_manifest(manifest_path, &manifest) != 0)
-		return 1;
-
+	manifest_init(&manifest);
 	uint8_t *code_buf = NULL;
 	size_t code_size = 0;
-	if (read_file(manifest.code_path, &code_buf, &code_size) != 0)
-		return 1;
-	if (code_size > CODE_SIZE_MAX) {
-		fprintf(stderr, "rompack: code size %zu exceeds 4 MB\n", code_size);
-		free(code_buf);
-		return 1;
-	}
-
 	uint8_t *data_buf = NULL;
 	size_t data_size = 0;
-	if (manifest.data_path[0]) {
-		if (read_file(manifest.data_path, &data_buf, &data_size) != 0) {
+
+	if (binary_path) {
+		/* Binary mode: code/data and entry_point from .nxbin */
+		if (load_nxbin(binary_path, &code_buf, &code_size, &data_buf, &data_size, &manifest.entry_point) != 0)
+			return 1;
+		if (manifest_path) {
+			if (load_manifest(manifest_path, &manifest, 1) != 0) {
+				free(code_buf);
+				if (data_buf) free(data_buf);
+				return 1;
+			}
+		} else {
+			strncpy(manifest.title, "NEXUS-32", PACK_TITLE_SIZE - 1);
+			manifest.title[PACK_TITLE_SIZE - 1] = '\0';
+			manifest.author[0] = '\0';
+			manifest.screen_width = 0;
+			manifest.screen_height = 0;
+			manifest.cycle_budget = 0;
+		}
+	} else {
+		/* Manifest mode: code/data paths and entry_point from pack.toml */
+		if (load_manifest(manifest_path, &manifest, 0) != 0)
+			return 1;
+		if (read_file(manifest.code_path, &code_buf, &code_size) != 0)
+			return 1;
+		if (code_size > CODE_SIZE_MAX) {
+			fprintf(stderr, "rompack: code size %zu exceeds 4 MB\n", code_size);
 			free(code_buf);
 			return 1;
 		}
-		if (data_size > DATA_SIZE_MAX) {
-			fprintf(stderr, "rompack: data size %zu exceeds 4 MB\n", data_size);
-			free(code_buf);
-			free(data_buf);
-			return 1;
+		if (manifest.data_path[0]) {
+			if (read_file(manifest.data_path, &data_buf, &data_size) != 0) {
+				free(code_buf);
+				return 1;
+			}
+			if (data_size > DATA_SIZE_MAX) {
+				fprintf(stderr, "rompack: data size %zu exceeds 4 MB\n", data_size);
+				free(code_buf);
+				free(data_buf);
+				return 1;
+			}
 		}
 	}
 
