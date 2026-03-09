@@ -1,0 +1,5 @@
+# Minimal pack manifest for testing
+code = "code.bin"
+entry_point = 0x400
+title = "Minimal Test"
+author = "nexus32-romtools"
