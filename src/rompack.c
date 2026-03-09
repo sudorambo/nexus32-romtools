@@ -1,8 +1,8 @@
 /*
  * rompack — NEXUS-32 ROM packer.
- * Mode 1: rompack -o <out.nxrom> -c <pack.toml> [--no-validate] [--compress]
+ * Mode 1: rompack -o <out.nxrom> -c <pack.toml> [--no-validate]
  *   Manifest must have code, entry_point, title, author; optional data.
- * Mode 2: rompack -o <out.nxrom> -b <file.nxbin> [ -c pack.toml ] [--no-validate] [--compress]
+ * Mode 2: rompack -o <out.nxrom> -b <file.nxbin> [-c pack.toml] [--no-validate]
  *   Code/data from .nxbin; entry_point from .nxbin; optional -c for title/author/screen/cycle_budget.
  */
 
@@ -44,7 +44,6 @@ static void manifest_init(pack_manifest_t *m)
 /* Parse "key = value" or "key=value". Value may be quoted. Returns 1 if line was key=value. */
 static int parse_line(const char *line, char *key, size_t key_size, char *val, size_t val_size)
 {
-	while (*line && isspace((unsigned char)*line)) line++;
 	while (*line && isspace((unsigned char)*line)) line++;
 	const char *k = line;
 	while (*line && *line != '=' && !isspace((unsigned char)*line)) line++;
@@ -244,8 +243,8 @@ static int read_file(const char *path, uint8_t **out_buf, size_t *out_size)
 
 static const char usage[] =
 	"rompack: usage:\n"
-	"  Mode 1: rompack -o <out.nxrom> -c <pack.toml> [--no-validate] [--compress]\n"
-	"  Mode 2: rompack -o <out.nxrom> -b <file.nxbin> [-c pack.toml] [--no-validate] [--compress]\n";
+	"  Mode 1: rompack -o <out.nxrom> -c <pack.toml> [--no-validate]\n"
+	"  Mode 2: rompack -o <out.nxrom> -b <file.nxbin> [-c pack.toml] [--no-validate]\n";
 
 int main(int argc, char **argv)
 {
@@ -253,7 +252,6 @@ int main(int argc, char **argv)
 	const char *manifest_path = NULL;
 	const char *binary_path = NULL;
 	int no_validate = 0;
-	int use_compress = 0;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
 			out_path = argv[++i];
@@ -263,8 +261,6 @@ int main(int argc, char **argv)
 			binary_path = argv[++i];
 		else if (strcmp(argv[i], "--no-validate") == 0)
 			no_validate = 1;
-		else if (strcmp(argv[i], "--compress") == 0)
-			use_compress = 1;
 		else {
 			fputs(usage, stderr);
 			return 1;
@@ -364,7 +360,7 @@ int main(int argc, char **argv)
 	h.magic[2] = NXROM_MAGIC_2;
 	h.magic[3] = NXROM_MAGIC_3;
 	h.format_version = FORMAT_VERSION_1_0;
-	h.flags = use_compress ? 1u : 0u;  /* Bit 0: compressed assets (per spec §9.2) */
+	h.flags = 0;
 	h.entry_point = manifest.entry_point;
 	h.code_offset = code_offset;
 	h.code_size = (uint32_t)code_size;

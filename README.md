@@ -5,8 +5,8 @@ ROM packaging, validation, and inspection tools for the NEXUS-32 fantasy game co
 ## Tools
 
 - **romcheck** — Validate a `.nxrom` file (magic, format version, checksums, segment layout).
-- **rompack** — Pack code, data, and assets into a `.nxrom` (supports minimal manifest or .nxbin when SDK format is defined).
-- **rominspect** — Inspect ROM header, assets, and optionally disassemble code at entry point.
+- **rompack** — Pack code, data, and assets into a `.nxrom` (manifest mode via `pack.toml`, or binary mode from a `.nxbin`).
+- **rominspect** — Inspect ROM header, assets, and disassemble code at entry point (full instruction mnemonics).
 
 ## Build
 
@@ -25,10 +25,10 @@ Executables: `romcheck`, `rompack`, `rominspect` (in `build/` or install path).
 - **Validate a ROM:** `romcheck game.nxrom [--verbose]`  
   Exit 0 = valid, 1 = errors. Rejects invalid or unsupported-format ROMs with clear messages.
 
-- **Pack a ROM (manifest mode):** `rompack -o game.nxrom -c pack.toml [--compress] [--no-validate]`  
-  Use a `pack.toml` manifest with keys: `code` (path to code.bin), `data` (optional), `entry_point` (e.g. 0x400), `title`, `author`. Optional: `screen_width`, `screen_height`, `cycle_budget`. `--compress` sets the compressed-assets flag in the header.
+- **Pack a ROM (manifest mode):** `rompack -o game.nxrom -c pack.toml [--no-validate]`  
+  Use a `pack.toml` manifest with keys: `code` (path to code.bin), `data` (optional), `entry_point` (e.g. 0x400), `title`, `author`. Optional: `screen_width`, `screen_height`, `cycle_budget`.
 
-- **Pack a ROM (binary mode):** `rompack -o game.nxrom -b game.nxbin [-c pack.toml] [--no-validate] [--compress]`  
+- **Pack a ROM (binary mode):** `rompack -o game.nxrom -b game.nxbin [-c pack.toml] [--no-validate]`  
   Reads code and data from the SDK linker output (`.nxbin`). Entry point comes from the .nxbin header. Optional `-c pack.toml` supplies title, author, screen_*, cycle_budget; if omitted, defaults are used.
 
 - **Inspect a ROM:** `rominspect game.nxrom [--header] [--assets] [--disasm N]`  

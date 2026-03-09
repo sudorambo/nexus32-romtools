@@ -94,18 +94,87 @@ static void print_assets(const asset_entry_t *entries, int n)
 	}
 }
 
-/* Minimal disasm: print N words at entry point as hex (raw). Code is at code_offset in ROM. */
+static void disasm_one(uint32_t insn, uint32_t pc, char *buf, size_t bufsize)
+{
+	uint32_t op = insn >> 26, rs = (insn >> 21) & 31u, rt = (insn >> 16) & 31u;
+	uint32_t rd = (insn >> 11) & 31u, shamt = (insn >> 6) & 31u, func = insn & 63u;
+	uint32_t imm = insn & 0xFFFFu;
+	int32_t simm = (int32_t)(int16_t)(uint16_t)imm;
+
+	if (insn == 0) { snprintf(buf, bufsize, "nop"); return; }
+	if (op == 0x00u) {
+		const char *mn = NULL;
+		switch (func) {
+		case 0x00: snprintf(buf, bufsize, "sll r%u, r%u, %u", rd, rt, shamt); return;
+		case 0x02: snprintf(buf, bufsize, "srl r%u, r%u, %u", rd, rt, shamt); return;
+		case 0x03: snprintf(buf, bufsize, "sra r%u, r%u, %u", rd, rt, shamt); return;
+		case 0x04: mn = "sllv"; break; case 0x06: mn = "srlv"; break; case 0x07: mn = "srav"; break;
+		case 0x08: snprintf(buf, bufsize, "jr r%u", rs); return;
+		case 0x09: snprintf(buf, bufsize, "jalr r%u, r%u", rd, rs); return;
+		case 0x18: mn = "mul"; break; case 0x19: mn = "mulh"; break;
+		case 0x1a: mn = "div"; break; case 0x1b: mn = "divu"; break; case 0x1c: mn = "mod"; break;
+		case 0x20: mn = "add"; break; case 0x21: mn = "addu"; break;
+		case 0x22: mn = "sub"; break; case 0x23: mn = "subu"; break;
+		case 0x24: mn = "and"; break; case 0x25: mn = "or"; break;
+		case 0x26: mn = "xor"; break; case 0x27: mn = "nor"; break;
+		case 0x2a: mn = "slt"; break; case 0x2b: mn = "sltu"; break;
+		default: break;
+		}
+		if (mn) { snprintf(buf, bufsize, "%s r%u, r%u, r%u", mn, rd, rs, rt); return; }
+	}
+	switch (op) {
+	case 0x02u: snprintf(buf, bufsize, "j 0x%08X", (pc & 0xF0000000u) | ((insn & 0x3FFFFFFu) << 2)); return;
+	case 0x03u: snprintf(buf, bufsize, "jal 0x%08X", (pc & 0xF0000000u) | ((insn & 0x3FFFFFFu) << 2)); return;
+	case 0x04u: case 0x05u: case 0x14u: case 0x15u: case 0x16u: case 0x17u: {
+		const char *br[] = { [0x04]=  "beq", [0x05] = "bne", [0x14] = "blt", [0x15] = "bgt", [0x16] = "ble", [0x17] = "bge" };
+		snprintf(buf, bufsize, "%s r%u, r%u, 0x%08X", br[op], rs, rt, pc + 4 + (uint32_t)(simm << 2)); return;
+	}
+	case 0x08u: snprintf(buf, bufsize, "addi r%u, r%u, %d", rt, rs, (int)simm); return;
+	case 0x09u: snprintf(buf, bufsize, "addiu r%u, r%u, %d", rt, rs, (int)simm); return;
+	case 0x0au: snprintf(buf, bufsize, "slti r%u, r%u, %d", rt, rs, (int)simm); return;
+	case 0x0bu: snprintf(buf, bufsize, "sltiu r%u, r%u, %d", rt, rs, (int)simm); return;
+	case 0x0cu: snprintf(buf, bufsize, "andi r%u, r%u, 0x%04x", rt, rs, imm); return;
+	case 0x0du: snprintf(buf, bufsize, "ori r%u, r%u, 0x%04x", rt, rs, imm); return;
+	case 0x0eu: snprintf(buf, bufsize, "xori r%u, r%u, 0x%04x", rt, rs, imm); return;
+	case 0x0fu: snprintf(buf, bufsize, "lui r%u, 0x%04x", rt, imm); return;
+	case 0x20u: snprintf(buf, bufsize, "lb r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x21u: snprintf(buf, bufsize, "lh r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x23u: snprintf(buf, bufsize, "lw r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x24u: snprintf(buf, bufsize, "lbu r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x25u: snprintf(buf, bufsize, "lhu r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x28u: snprintf(buf, bufsize, "sb r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x29u: snprintf(buf, bufsize, "sh r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x2bu: snprintf(buf, bufsize, "sw r%u, %d(r%u)", rt, (int)simm, rs); return;
+	case 0x3fu:
+		switch (func) {
+		case 0x00: snprintf(buf, bufsize, "syscall"); return;
+		case 0x01: snprintf(buf, bufsize, "break"); return;
+		case 0x02: snprintf(buf, bufsize, "nop"); return;
+		case 0x03: snprintf(buf, bufsize, "halt"); return;
+		case 0x04: snprintf(buf, bufsize, "eret"); return;
+		case 0x10: snprintf(buf, bufsize, "mfc0 r%u, r%u", rt, rd); return;
+		case 0x11: snprintf(buf, bufsize, "mtc0 r%u, r%u", rt, rd); return;
+		default: break;
+		}
+		break;
+	default: break;
+	}
+	snprintf(buf, bufsize, ".word 0x%08X", insn);
+}
+
 static void print_disasm(const uint8_t *rom, size_t rom_size, const nxrom_header_t *h, int n)
 {
 	uint32_t off = h->code_offset;
 	uint32_t size = h->code_size;
 	if (off + size > rom_size || n <= 0)
 		return;
-	printf("Disassembly at entry 0x%08X (%u instructions):\n", (unsigned)h->entry_point, (unsigned)n);
+	printf("Disassembly at entry 0x%08X (%d instructions):\n", (unsigned)h->entry_point, n);
 	const uint8_t *p = rom + off;
 	for (int i = 0; i < n && (uint32_t)(i * 4) < size; i++) {
 		uint32_t word = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-		printf("  %08X:  %08X\n", (unsigned)(h->entry_point + i * 4), (unsigned)word);
+		char line[128];
+		disasm_one(word, h->entry_point + (uint32_t)(i * 4), line, sizeof(line));
+		printf("  %08X:  %08X  %s\n", (unsigned)(h->entry_point + i * 4), (unsigned)word, line);
 		p += 4;
 	}
 }

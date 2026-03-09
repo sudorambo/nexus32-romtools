@@ -23,8 +23,8 @@ target_link_libraries(romcheck romtools_common)
 add_executable(rominspect src/rominspect.c)
 target_link_libraries(rominspect romtools_common)
 
-# rompack (with bundled LZ4 for --compress)
-add_executable(rompack src/rompack.c src/lz4.c)
+# rompack
+add_executable(rompack src/rompack.c)
 target_include_directories(rompack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(rompack romtools_common)
 
