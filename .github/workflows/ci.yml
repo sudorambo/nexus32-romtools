@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          mkdir -p build
+          cd build
+          cmake ..
+          cmake --build .
+
+      - name: Test (minimal ROM)
+        run: |
+          cd test/minimal
+          ../../build/rompack -o ci.nxrom -c pack.toml
+          ../../build/romcheck ci.nxrom
+          ../../build/romcheck ci.nxrom --verbose
+          ../../build/rominspect ci.nxrom
+          ../../build/rominspect ci.nxrom --header
+          ../../build/rominspect ci.nxrom --assets
+
+      - name: Test (with --compress)
+        run: |
+          cd test/minimal
+          ../../build/rompack -o ci_compressed.nxrom -c pack.toml --compress
+          ../../build/romcheck ci_compressed.nxrom
